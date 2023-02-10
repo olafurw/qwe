@@ -9,6 +9,7 @@
 # Original concept and code
 #   https://github.com/olafurw/olafurw-home/blob/master/tools/qwe.sh
 # Inspiration: https://superuser.com/questions/416881
+# Also https://stackoverflow.com/questions/7374534
 #
 # Please add a line to .bashrc to provide this function:
 #   source /path/to/qwe.sh
@@ -22,10 +23,10 @@ _qweEscapeRxCharsFn () {
 }
 
 _qweEchoTagDataLine () {
-  declare _tag_name _esc_str;
-  _tag_name="${1:-}";
-  _esc_str="$(_qweEscapeRxCharsFn "${_tag_name}")";
-  grep -E "^${_esc_str}"$'\t' "${_qweDataFile}";
+  declare _tag_key _esc_key;
+  _tag_key="${1:-}";
+  _esc_key="$(_qweEscapeRxCharsFn "${_tag_key}")";
+  grep -E "^${_esc_key}"$'\t' "${_qweDataFile}";
 }
 
 _qweEchoHeadFn () {
@@ -61,32 +62,39 @@ _qweEchoMsgFn () {
   fi
 }
 
-_qweChkTagNameFn () {
-  declare _tag_name;
-  _tag_name="${1:-}";
+_qweEchoConfirmFn () {
+  declare _act_str _line_str;
+  _act_str="${1:-}";
+  _line_str="${2:-}";
+  _qweEchoMsgFn "${_act_str} |${_line_str//$'\t'/| }\n  ---";
+}
 
-  if [ -z "${_tag_name}" ]; then
+_qweChkTagNameFn () {
+  declare _tag_key;
+  _tag_key="${1:-}";
+
+  if [ -z "${_tag_key}" ]; then
     _qweEchoHeadFn 'ERROR';
     _qweEchoMsgFn  "Argument required.\n";
     return 1;
   fi
 
-  if ! grep -qE '^[0-9a-zA-Z_.+~-]+$' <<< "${_tag_name}"; then
+  if ! grep -qE '^[0-9a-zA-Z_.+~-]+$' <<< "${_tag_key}"; then
     _qweEchoHeadFn 'ERROR';
-    _qweEchoMsgFn  "Special chars in tag name |${_tag_name}|";
+    _qweEchoMsgFn  "Special chars in tag name |${_tag_key}|";
     _qweEchoMsgFn  "  Use only 0-9, a-Z, _, ., +, ~, or -.\n";
     return 1;
   fi
 }
 
 _qweEchoSplitFn () {
-  declare _arg_str _esc_home_str _bit_list _post_str;
+  declare _arg_str _esc_home_dir _bit_list _post_str;
   _arg_str="${1:-}";
 
   # Escape and replace $HOME expansion of '~'
-  _esc_home_str="$(_qweEscapeRxCharsFn "$HOME")";
+  _esc_home_dir="$(_qweEscapeRxCharsFn "$HOME")";
   # shellcheck disable=SC2001
-  _arg_str="$(sed 's|^'"${_esc_home_str}"'|~|' <<< "${_arg_str}")";
+  _arg_str="$(sed 's|^'"${_esc_home_dir}"'|~|' <<< "${_arg_str}")";
 
   if grep -qE '/' <<< "${_arg_str}"; then
     IFS='/' read -r -d '' -a _bit_list <<< "${_arg_str}";
@@ -99,11 +107,11 @@ _qweEchoSplitFn () {
 }
 
 _qweEchoTagDirFn () {
-  declare _tag_name _line_str _dir_str;
-  _tag_name="${1:-}";
+  declare _tag_key _match_line _tag_dir;
+  _tag_key="${1:-}";
 
   # Handle special '~' home char
-  if [ "${_tag_name}" = '~' ]; then
+  if [ "${_tag_key}" = '~' ]; then
     if [ -n "$HOME" ]; then echo "$HOME"; return; fi
     _qweEchoHeadFn 'ERROR';
     _qweEchoMsgFn  'HOME directory is not set.';
@@ -111,7 +119,7 @@ _qweEchoTagDirFn () {
   fi
 
   # Handle special '-' last directory char
-  if [ "${_tag_name}" = '-' ]; then
+  if [ "${_tag_key}" = '-' ]; then
     if [ -n "${_qweLastDirname}" ]; then
       echo "${_qweLastDirname}";
       return;
@@ -121,41 +129,43 @@ _qweEchoTagDirFn () {
     return 1;
   fi
 
-  if ! _qweChkTagNameFn "${_tag_name}"; then return; fi
+  if ! _qweChkTagNameFn "${_tag_key}"; then return; fi
 
-  _line_str="$(_qweEchoTagDataLine "${_tag_name}")";
-  if [ -z "${_line_str}" ]; then
+  _match_line="$(_qweEchoTagDataLine "${_tag_key}")";
+  if [ -z "${_match_line}" ]; then
     _qweEchoHeadFn 'ERROR';
-    _qweEchoMsgFn  "Tag |${_tag_name}| not found.";
+    _qweEchoMsgFn  "Tag |${_tag_key}| not found.";
     _qweEchoMsgFn  "Use -l to list; -h or -? for help\n";
     return 1;
   fi
 
   # shellcheck disable=SC2001
-  _dir_str=$(echo -e "${_line_str}" |sed -e "s/^${_tag_name}\\t//");
-  echo "${_dir_str}";
+  _tag_dir=$(cut -f2 <<< "${_match_line}");
+  echo "${_tag_dir/\$HOME/$HOME}"; # abstract $HOME
 }
 
 _qweEchoDirTagFn () {
-  declare _dir_str _esc_str _line_str _tag_str;
+  declare _search_dir _esc_str _match_line _tag_key;
 
-  _dir_str="${1:-$(pwd)}";
-  _esc_str="$(_qweEscapeRxCharsFn "${_dir_str}")";
-  _tag_str='';
-  _line_str="$(grep -E $'^[^\t]+\t'"${_esc_str}$" "${_qweDataFile}")";
+  _search_dir="${1:-$(pwd)}";
+  _search_dir="${_search_dir/$HOME/\$HOME}"; # abstract $HOME
+  _esc_str="$(_qweEscapeRxCharsFn "${_search_dir}")";
+  _tag_key='';
+  _match_line="$(grep -E $'^[^\t]+\t'"${_esc_str}$" "${_qweDataFile}")";
 
-  if [ -n "${_line_str}" ]; then
-    _tag_str="$(echo "${_line_str}" |awk '{print $1}')";
+  if [ -n "${_match_line}" ]; then
+    _tag_key="$(echo "${_match_line}" |cut -f1)";
   fi
 
-  echo "${_tag_str}";
+  echo "${_tag_key}";
 }
 
 ## BEGIN _qweCompReplyFn {
  # Purpose:  Tab completion support
+ #
 _qweCompReplyFn () {
   declare _arg_str _esc_str _split_list \
-    _tag_name _path_str _tag_dir _pwd_dir;
+    _tag_key _path_str _tag_dir _pwd_dir;
 
   _arg_str="${2:-}";
 
@@ -179,32 +189,33 @@ _qweCompReplyFn () {
     _qweEchoSplitFn "${_arg_str}"
   );
 
-  _tag_name="${_split_list[0]}";
+  _tag_key="${_split_list[0]}";
   _path_str="${_split_list[1]}";
-  _tag_dir="$(_qweEchoTagDirFn "${_tag_name}")";
+  _tag_dir="$(_qweEchoTagDirFn "${_tag_key}")";
   if [ -z "${_tag_dir}" ]; then return; fi
 
+  _tag_dir="${_tag_dir/\$HOME/$HOME}"; # abstract $HOME
   _pwd_dir="$(pwd)";
   cd "${_tag_dir}" || return 1;
   for _loop_str in "${_path_str}"*; do
     if [ -d "${_tag_dir}/${_loop_str/}" ]; then
-      COMPREPLY+=("${_tag_name}/${_loop_str}/");
+      COMPREPLY+=("${_tag_key}/${_loop_str}/");
     fi
   done
 
   if [ "${#COMPREPLY}" = '0' ]; then
     COMPREPLY+=("${_arg_str}");
   fi
-  cd "${_pwd_dir}" || return;
+  cd "${_pwd_dir/\$HOME/$HOME}" || return;
 }
 ## . END _qweCompReplyFn }
 
-## BEGIN _readLineStrFn {
+## BEGIN _qweReadLineStrFn {
  # Purpose: Custom readline autocomplete
  # I scanned the internet and this does not appear possible using readline.
  # https://stackoverflow.com/questions/4819819
  #
-_readLineStrFn () {
+_qweReadLineStrFn () {
   declare _char_str _char_int _char_count _solve_str;
 
   _solve_str='';
@@ -235,10 +246,10 @@ _readLineStrFn () {
               if [[ "${_str}" =~ ^"${_solve_str}" ]]; then break; fi
               (( _count-- ));
             done
-            ## End Solve max matching string }
+            ## . End Solve max matching string }
           done
           1>&2 printf '\n%s' "${_solve_str}";
-          ## End Print options }
+          ## . End Print options }
         fi
         continue;
       ;;
@@ -253,7 +264,7 @@ _readLineStrFn () {
       # Handle return
       0 ) _qweEchoStderrFn; break;;
 
-      # Handle all other keys
+      # Handle other keys
       *) 1>&2 printf '%s' "${_char_str}";
         _solve_str+="${_char_str}";
         ;;
@@ -261,55 +272,62 @@ _readLineStrFn () {
   done
   echo "${_solve_str}";
 }
-## . END _readLineStrFn }
+## . END _qweReadLineStrFn }
 ## . END UTILITIES }
 
 ## BEGIN OPTION HANDLERS {
 ## BEGIN _qweAddTagFn {
  # Purpose: Handler for qwe -a <tag>
+ #
 _qweAddTagFn () {
-  declare _tag_name _line_str _pwd_str _pwd_tag_str;
+  declare _tag_name _match_line _pwd_dir _pwd_tag_key;
   _tag_name="${1:-}";
   if ! _qweChkTagNameFn "${_tag_name}"; then return; fi
 
-  _pwd_str="$(pwd)";
-  _line_str="$(_qweEchoTagDataLine "${_tag_name}")";
-  if [ -n "${_line_str}" ]; then
+  _pwd_dir="$(pwd)";
+  _pwd_dir="${_pwd_dir/$HOME/\$HOME}"; # abstract $HOME
+
+  _match_line="$(_qweEchoTagDataLine "${_tag_name}")";
+  if [ -n "${_match_line}" ]; then
     _qweEchoHeadFn 'ERROR';
     _qweEchoMsgFn  "Tag |${_tag_name}| already exists.";
     _qweEchoMsgFn  "  Please provide a new, unique tag name.\n";
     return 1;
   fi
 
-  _pwd_tag_str="$(_qweEchoDirTagFn "${_pwd_str}")";
-  if [ -n "${_pwd_tag_str}" ]; then
+  _pwd_tag_key="$(_qweEchoDirTagFn "${_pwd_dir}")";
+  if [ -n "${_pwd_tag_key}" ]; then
     _qweEchoHeadFn 'ERROR';
-    _qweEchoMsgFn  "This directory already has the tag |${_pwd_tag_str}|.";
+    _qweEchoMsgFn  "This directory already has the tag |${_pwd_tag_key}|.";
     _qweEchoMsgFn  "  Use -r to rename the tag or -d to delete it.\n";
     return 1;
   fi
 
-  echo -e "${_tag_name}\t${_pwd_str}" >> "${_qweDataFile}";
+  _match_line="${_tag_name}"$'\t'"${_pwd_dir}";
+  echo "${_match_line}" >> "${_qweDataFile}" || return;
+  _qweEchoConfirmFn 'Add   ' "${_match_line}";
 }
 ## . END _qweAddTagFn }
 
 ## BEGIN _qweDeleteTagFn {
  # Purpose: Handler for qwe -d <tag>
+ #
 _qweDeleteTagFn () {
-  declare _line_str _tag_name;
+  declare _tag_name _match_line;
   _tag_name="${1:-}";
 
   if ! _qweChkTagNameFn "${_tag_name}"; then return; fi
 
-  _line_str="$(_qweEchoTagDataLine "${_tag_name}")";
-  if [ -z "$_line_str" ]; then
+  _match_line="$(_qweEchoTagDataLine "${_tag_name}")";
+  if [ -z "$_match_line" ]; then
     _qweEchoHeadFn 'ERROR';
     _qweEchoMsgFn  "Tag |${_tag_name}| does not exist.";
     _qweEchoMsgFn  "  Use -l to list tags or -h for help.\n";
     return 1;
   fi
 
-  sed -i -e "/^${_tag_name}\\t/d" "${_qweDataFile}";
+  sed -i "/^${_tag_name}\\t/d" "${_qweDataFile}" || return;
+  _qweEchoConfirmFn 'Delete' "${_match_line}";
 }
 ## . END _qweDeleteTagFn }
 
@@ -330,35 +348,34 @@ ${_qweBasename} -p <tag>[/path] : Print the directory identified by <tag>[/path]
 ${_qweBasename} -r <tag> <new>  : Rename <tag> with <new> name
 ${_qweBasename} -s              : Show tag of current directory
 
-Use <TAB> to autocomplete <tag>[/path].
-'/path' is an optional directory path.
-
+Use <TAB> to autocomplete <tag>[/<path>].
 _EOH02
 }
 ## . END _qweEchoHelpFn }
 
 ## BEGIN _qweEchoTagLinesFn {
  # Purpose: Handler for qwe -l
+ #
 _qweEchoTagLinesFn () {
-  declare _pwd_tag_str _sort_str;
-  _pwd_tag_str="$(_qweEchoDirTagFn)";
+  declare _pwd_tag_key _sort_str;
+  _pwd_tag_key="$(_qweEchoDirTagFn)";
 
   _sort_str="$(sort "${_qweDataFile}")";
   _qweEchoStderrFn "TAG\tDIRECTORY
 ~\tHome: ${HOME:-Not Available}
 -\tLast: ${_qweLastDirname:-No Last directory}
-${_sort_str}
-";
-  if [ -n "${_pwd_tag_str}" ]; then
-    _qweEchoStderrFn "${_pwd_tag_str}\t<= CURRENT DIRECTORY TAG\n";
+${_sort_str}";
+  if [ -n "${_pwd_tag_key}" ]; then
+    _qweEchoStderrFn "${_pwd_tag_key}\t<= CURRENT DIRECTORY TAG\n";
   fi
 }
 ## . END _qweEchoTagLinesFn }
 
 ## BEGIN _qweEchoTagPlusFn {
  # Purpose: Handler for qwe -p <tag>[/path]
+ #
 _qweEchoTagPlusFn () {
-  declare _arg_str _split_list _tag_name _path_str _dir_str;
+  declare _arg_str _split_list _tag_name _path_str _tag_dir;
 
   _arg_str="${1:-}";
   IFS=$'\n' read -r -d '' -a _split_list < <(
@@ -367,14 +384,14 @@ _qweEchoTagPlusFn () {
   _tag_name="${_split_list[0]}";
   [ "${#_split_list[@]}" -gt 1 ] && _path_str="${_split_list[1]}";
 
-  if ! _dir_str=$(_qweEchoTagDirFn "${_tag_name}"); then
-    return;
-  fi
+  if _tag_dir="$(_qweEchoTagDirFn "${_tag_name}")"; then
+    _tag_dir="${_tag_dir/\$HOME/$HOME}";
+  else return; fi
 
   if [ -n "${_path_str}" ]; then
-    echo "${_dir_str}/${_path_str}" || return 1;
+    echo "${_tag_dir}/${_path_str}" || return;
   else
-    echo "${_dir_str}" || return 1;
+    echo "${_tag_dir}" || return;
   fi
   return;
 }
@@ -383,37 +400,37 @@ _qweEchoTagPlusFn () {
 ## BEGIN _qweRenameTagFn {
  # Purpose: Handler for qwe -r <tag>
 _qweRenameTagFn () {
-  declare _tag_name _new_name _line_str;
-  _tag_name="${1:-}";
-  _new_name="${2:-}";
+  declare _old_key _new_key _match_line;
+  _old_key="${1:-}";
+  _new_key="${2:-}";
 
-  if ! _qweChkTagNameFn "${_tag_name}"; then return; fi
-  if ! _qweChkTagNameFn "${_new_name}"; then return; fi
+  if ! _qweChkTagNameFn "${_old_key}"; then return; fi
+  if ! _qweChkTagNameFn "${_new_key}"; then return; fi
 
-  _line_str="$(_qweEchoTagDataLine "${_tag_name}")";
-  if [ -z "${_line_str}" ]; then
+  _match_line="$(_qweEchoTagDataLine "${_old_key}")";
+  if [ -z "${_match_line}" ]; then
     _qweEchoHeadFn 'ERROR';
-    _qweEchoMsgFn  "Old Tag |${_tag_name}| not found.";
+    _qweEchoMsgFn  "Old Tag |${_old_key}| not found.";
     _qweEchoMsgFn  "  Use -l to list tags or -h for help.\n";
     return 1;
   fi
 
-  _line_str="$(_qweEchoTagDataLine "${_new_name}")";
-  if [ -n "${_line_str}" ]; then
+  _match_line="$(_qweEchoTagDataLine "${_new_key}")";
+  if [ -n "${_match_line}" ]; then
     _qweEchoHeadFn 'ERROR';
-    _qweEchoMsgFn  "New Tag |${_new_name}| already exists.";
+    _qweEchoMsgFn  "New Tag |${_new_key}| already exists.";
     _qweEchoMsgFn  "  Use -l to list tags or -h for help.\n";
     return 1;
   fi
 
-  if sed -i "s/^${_tag_name}"$'\t'"/${_new_name}"$'\t'"/g" \
+  if sed -i "s/^${_old_key}"$'\t'"/${_new_key}"$'\t'"/g" \
     "${_qweDataFile}"; then
-    _qweEchoMsgFn "Tag |${_tag_name}| renamed to |${_new_name}|\n";
+    _qweEchoMsgFn "Tag |${_old_key}| renamed to |${_new_key}|\n";
     return;
   fi
 
   _qweEchoHeadFn 'ERROR';
-  _qweEchoMsgFn  "Could not rename |${_tag_name}|\n"
+  _qweEchoMsgFn  "Could not rename |${_old_key}|\n"
   return 1;
 }
 ## . END _qweRenameTagFn }
@@ -423,27 +440,26 @@ _qweRenameTagFn () {
 ## BEGIN _qweCdTagPlusFn {
  # Purpose: Used by handler qweInteractFn
 _qweCdTagPlusFn () {
-  declare _arg_str _split_list _tag_name _path_str \
-    _dir_str _pwd_str;
+  declare _arg_str _split_list _tag_key _path_str \
+    _tag_dir _pwd_str;
 
   _arg_str="${1:-}";
   IFS=$'\n' read -r -d '' -a _split_list < <(
     _qweEchoSplitFn "${_arg_str}"
   );
 
-  _tag_name="${_split_list[0]}";
+  _tag_key="${_split_list[0]}";
   [ "${#_split_list[@]}" -gt 1 ] && _path_str="${_split_list[1]}";
 
-  if ! _dir_str="$(_qweEchoTagDirFn "${_tag_name}")"; then
-    return;
-  fi
+  if _tag_dir="$(_qweEchoTagDirFn "${_tag_key}")"; then
+    _tag_dir="${_tag_dir/\$HOME/$HOME}";
+  else return; fi
 
   _pwd_str="$(pwd)";
-
   if [ -n "${_path_str}" ]; then
-    cd "${_dir_str}/${_path_str}" || return 1;
+    cd "${_tag_dir}/${_path_str}" || return;
   else
-    cd "${_dir_str}" || return 1;
+    cd "${_tag_dir}" || return;
   fi
 
   if [ "${_pwd_str}" != "${_qweLastDirname}" ]; then
@@ -459,10 +475,8 @@ _qweInteractFn () {
 
   _qweEchoTagLinesFn;
   _qweEchoStderrFn 'Use <TAB> to autocomplete <tag>[/path].'
-  _qweEchoStderrFn "'/path' is an optional directory path.";
   _qweEchoStderrFn 'Enter <tag>[/path], <?> for help, <Enter> to exit.'
-  _qweEchoStderrFn;
-  _reply="$(_readLineStrFn)";
+  _reply="$(_qweReadLineStrFn)";
 
   if [ "${_reply}" = '?' ]; then
     _qweEchoHeadFn 'HELP'; _qweEchoHelpFn;
@@ -481,7 +495,7 @@ _qweInteractFn () {
 ## . END _qweInteractFn }
 ## . END OPTION HANDLERS }
 
-## BEGIN qwe main
+## BEGIN qwe main {
 qwe () {
   declare _arg1_str _arg2_str _arg3_str;
   _arg1_str="${1:-}";
@@ -495,7 +509,7 @@ qwe () {
     -|-/* ) ;;
     -a ) _qweAddTagFn "${_arg2_str}"; return;;
     -d ) _qweDeleteTagFn "${_arg2_str}"; return;;
-    -h|-\? ) _qweEchoHeadFn 'HELP'; _qweEchoHelpFn; return 0;;
+    -h|-\? ) _qweEchoHeadFn 'HELP'; _qweEchoHelpFn; return;;
     -l ) _qweEchoHeadFn 'LIST'; _qweEchoTagLinesFn; return;;
     -p ) _qweEchoTagPlusFn "${_arg2_str}"; return;;
     -r ) _qweRenameTagFn "${_arg2_str}" "${_arg3_str}"; return;;
@@ -505,8 +519,9 @@ qwe () {
       _qweEchoMsgFn  "Invalid option: ${_arg1_str} \n";
       _qweEchoHeadFn 'HELP'; _qweEchoHelpFn; return 1;;
   esac;
-  ## End Process option }
+  ## . End Process option }
 
+  ## Begin Process input path {
   if [ -n "${_arg1_str}" ]; then
     _qweCdTagPlusFn "$*";
     return;
@@ -515,13 +530,14 @@ qwe () {
     _qweInteractFn;
     return;
   fi
-  ## End Process input path }
+  ## . End Process input path }
 }
+## . END qwe main }
 
-## BEGIN MAIN {
+## BEGIN Prepare autocomplete {
 _qweDataFile="${HOME}/.qwe.data";
 _qweBasename='qwe';
 touch "${_qweDataFile}";
-
 complete -o nospace -F _qweCompReplyFn qwe;
-## END MAIN }
+## . END Prepare autocomplete }
+
